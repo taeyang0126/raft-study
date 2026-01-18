@@ -1,6 +1,6 @@
 # Raft 学习进度追踪器
 
-  **最后更新日期**：2026-01-17（第二次更新）
+  **最后更新日期**：2026-01-18（第三次更新）
   **学习者**：7年 Java 开发经验
   **学习目标**：深入理解 Raft 算法，使用 Java 实现 Raft 分布式系统
  ---
@@ -432,18 +432,21 @@
 
   ### 最近会话（详细内容见 sessions 目录）
 
-   #### 2026-01-17
-   **主要主题**：客户端与 Raft 集群的交互 + 提交的完整机制
-   **核心收获**：
-   - 理解客户端如何找到 Leader（缓存 Leader ID）
-   - 理解客户端如何知道请求成功（success + commandIndex）
-   - 理解 Leader 崩溃后的重试机制
-   - 理解去重的职责和方案（应用层负责去重，Raft 层只负责日志一致性）
-   - 理解 requestId 的生成和管理（数据库、MMAP/FileChannel、Redis、雪花算法）
-   - 理解 requestId 集合的清理策略（基于时间、基于大小）
-   - 理解提交的完整机制（什么时候可以提交、如何通知 Follower 提交、状态机执行时机）
-   - 理解 commitIndex 的非持久化特性和恢复机制
-   **详细记录**：[sessions/2026-01-17/session-notes.md](../sessions/2026-01-17/session-notes.md)
+    #### 2026-01-17（包括 2026-01-18 补充讨论）
+    **主要主题**：客户端与 Raft 集群的交互 + 提交的完整机制 + Leader 重启后 commitIndex 的处理
+    **核心收获**：
+    - 理解客户端如何找到 Leader（缓存 Leader ID）
+    - 理解客户端如何知道请求成功（success + commandIndex）
+    - 理解 Leader 崩溃后的重试机制
+    - 理解去重的职责和方案（应用层负责去重，Raft 层只负责日志一致性）
+    - 理解 requestId 的生成和管理（数据库、MMAP/FileChannel、Redis、雪花算法）
+    - 理解 requestId 集合的清理策略（基于时间、基于大小）
+    - 理解提交的完整机制（什么时候可以提交、如何通知 Follower 提交、状态机执行时机）
+    - 理解 commitIndex 的非持久化特性
+    - 理解 Leader 重启后在没有当前任期新日志的情况下，无法更新 commitIndex（根据论文第 217 行的提交规则，必须满足 `log[N].term == currentTerm`）
+    - 理解旧任期日志会在提交当前任期日志时"间接提交"（利用日志匹配特性）
+    - 理解更新 commitIndex 意味着标记日志为"已提交"，不是简单的"更新内存"
+    **详细记录**：[sessions/2026-01-17/session-notes.md](../sessions/2026-01-17/session-notes.md)
 
   #### 2026-01-16（下午）
   **主要主题**：commitIndex 和 lastApplied 的关系 + nextIndex 和 matchIndex 的优化策略
@@ -536,11 +539,13 @@
      - 基于时间（requestId 自增，映射到时间戳）
      - 基于大小（定期清理最旧的 requestId）
 
-   11. **提交的完整机制**：
-     - 什么时候可以提交：Leader 接收到半数以上 success 后（前提是当前任期）
-     - 如何通知 Follower 提交：通过 AppendEntries RPC 的 `leaderCommit` 参数
-     - 状态机执行时机：Leader 和 Follower 都会，当 commitIndex > lastApplied 时，应用日志
-     - commitIndex 不持久化，Leader 重启后可以通过发送心跳收集 matchIndex 信息恢复
+    11. **提交的完整机制**：
+      - 什么时候可以提交：Leader 接收到半数以上 success 后（前提是当前任期）
+      - 如何通知 Follower 提交：通过 AppendEntries RPC 的 `leaderCommit` 参数
+      - 状态机执行时机：Leader 和 Follower 都会，当 commitIndex > lastApplied 时，应用日志
+      - commitIndex 不持久化，Leader 重启后如果没有当前任期的新日志，无法更新 commitIndex
+      - Leader 重启后必须等待当前任期有新日志才能更新 commitIndex（根据论文第 217 行的提交规则，必须满足 `log[N].term == currentTerm`）
+      - 旧任期日志会在提交当前任期日志时"间接提交"（利用日志匹配特性）
 
    ### 技术类比
 
@@ -571,7 +576,7 @@
   - [x] 2026-01-15：完全理解 AppendEntries RPC 的完整机制和 Leader 如何修复 Follower 的日志不一致
   - [x] 2026-01-16（上午）：深入理解提交规则的作用，构造正确的危险场景；理解 commitIndex 的更新机制；构建完整的知识体系（四个机制的配合逻辑）
    - [x] 2026-01-16（下午）：完全理解 commitIndex 和 lastApplied 的关系；理解 lastApplied 的持久化方案（通过快照）；掌握 nextIndex 和 matchIndex 的维护流程和优化策略
-   - [x] 2026-01-17：完全理解客户端与 Raft 集群的交互，包括客户端如何找到 Leader、如何处理重试、如何实现幂等；完全理解提交的完整机制
+   - [x] 2026-01-17：完全理解客户端与 Raft 集群的交互，包括客户端如何找到 Leader、如何处理重试、如何实现幂等；完全理解提交的完整机制；深入理解 Leader 重启后 commitIndex 的处理（2026-01-18 补充讨论）
 
   ### 未来的里程碑
 
@@ -643,19 +648,28 @@
    17. **Q: requestId 集合如何清理？**
       - A: 基于时间（requestId 自增，映射到时间戳，删除过期的 requestId）；基于大小（定期清理最旧的 requestId）；组合策略（先按时间清理，再按大小清理）。
 
-   ### 提交相关
+    ### 提交相关
 
-   18. **Q: commitIndex 需要持久化吗？**
-      - A: 不需要。commitIndex 是 Raft 层的非持久化状态，Leader 重启后可以通过发送心跳收集 matchIndex 信息恢复。
+    18. **Q: commitIndex 需要持久化吗？**
+       - A: 不需要。commitIndex 是 Raft 层的非持久化状态。Leader 重启后，如果没有当前任期的新日志，无法更新 commitIndex（根据论文第 217 行的提交规则，必须满足 `log[N].term == currentTerm`）。
 
-   19. **Q: Leader 重启后如何恢复 commitIndex？**
-      - A: 初始化 nextIndex=log.size+1，然后 preLogIndex=nextIndex-1，向各个节点发送心跳信息收集 matchIndex，再计算 commitIndex。
+    19. **Q: Leader 重启后如何恢复 commitIndex？**
+       - A: Leader 重启后，commitIndex 初始化为 0。如果当前任期没有新日志，即使收集到 matchIndex，也无法更新 commitIndex。必须等待当前任期有新日志，并且该日志复制到大多数节点后，才能更新 commitIndex。
 
-   20. **Q: Leader 如何通知 Follower 更新 commitIndex？**
-      - A: 通过 AppendEntries RPC 的 `leaderCommit` 参数。每次 AppendEntries 请求（包括心跳）都携带 Leader 的 commitIndex。
+    20. **Q: 为什么不能在没有新命令的情况下就更新 commitIndex？**
+       - A: 提交规则要求 `log[N].term == currentTerm`（论文第 217 行）。如果允许直接更新 commitIndex 来提交旧任期日志，可能会导致已提交的日志被新 Leader 覆盖（危险场景）。通过只提交当前任期的日志，间接提交旧任期日志，可以避免这个问题。
 
-   21. **Q: Follower 的日志不完整，能否更新 commitIndex？**
-      - A: 可以，但不能超过自己的日志长度。Follower 通过 `commitIndex = min(leaderCommit, getLastLogIndex())` 更新。
+    21. **Q: 更新 commitIndex 意味着什么？**
+       - A: 更新 commitIndex 意味着标记日志为"已提交"。这些日志会被应用到状态机，不会被覆盖。
+
+    22. **Q: 状态机的状态会丢失吗？**
+       - A: 不会。状态机的状态可以通过重新应用日志来恢复。当 commitIndex 更新后，所有 <= commitIndex 的日志都会被重新应用到状态机。
+
+    23. **Q: Leader 如何通知 Follower 更新 commitIndex？**
+       - A: 通过 AppendEntries RPC 的 `leaderCommit` 参数。每次 AppendEntries 请求（包括心跳）都携带 Leader 的 commitIndex。
+
+    24. **Q: Follower 的日志不完整，能否更新 commitIndex？**
+       - A: 可以，但不能超过自己的日志长度。Follower 通过 `commitIndex = min(leaderCommit, getLastLogIndex())` 更新。
 
     ### 安全性相关
 

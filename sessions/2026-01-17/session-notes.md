@@ -586,20 +586,141 @@ A: 通过提交当前任期的日志间接提交。例如：
 - Term 2 的日志：[index=4, term=2, command="SET b=2"]
 - Leader 提交 index=4 时，由于日志匹配特性，index=3 也自动提交。
 
+#### 补充讨论：Leader 重启后 commitIndex 的处理（2026-01-18 补充）
+
+**学生的疑问**：
+
+> 如果不能更新 commitIndex，那 leader 重启后的 commitIndex 不就没法计算得到了，必须有新命令才有新的 commitIndex？
+
+**AI 的初次回答（错误）**：
+
+错误地认为：
+- 可以更新内存，但不能直接提交旧任期日志
+- Leader 重启后可以通过发送心跳收集 matchIndex，然后根据 matchIndex 计算出 commitIndex
+
+**学生指出问题**：
+
+> 更新了内存不就相当于提交了吗？不然这个内存中的 commitIndex 有啥用
+
+**正确的理解（基于论文）**：
+
+根据论文第 217 行的 Leader 规则：
+
+> 假设存在 N 满足`N > commitIndex`，使得大多数的 `matchIndex[i] ≥ N`以及`log[N].term == currentTerm` 成立，则令 `commitIndex = N`
+
+**关键点**：
+1. 必须满足 `log[N].term == currentTerm`（当前任期）
+2. 只能提交**当前任期**的日志
+3. 旧任期日志通过提交当前任期日志来**间接提交**
+
+**Leader 重启后的正确流程**：
+
+```java
+// 场景：Term 1 提交了 index=5，Term 2 Leader 重启
+// 从持久化存储读取
+log = readLog(); // log[1..5], Term=1
+currentTerm = readTerm(); // 2
+votedFor = readVotedFor();
+
+// 易失性状态，初始化
+commitIndex = 0; // 不持久化，重启后丢失
+lastApplied = 0;
+
+// 成为 Leader 后，发送心跳收集 matchIndex
+matchIndex = [5, 5, 5, 5, 5]; // 假设所有 Follower 都有 log[5]
+
+// 检查是否可以提交（论文第 217 行）
+for (int i = commitIndex + 1; i <= getLastLogIndex(); i++) {
+    if (log.get(i).term == currentTerm) { // ⭐ log[5].term=1, currentTerm=2
+        // 条件不满足！term 不相等
+    }
+}
+// 没有满足条件的日志
+// commitIndex 保持 = 0
+
+// ⚠️ 关键：在没有当前任期新日志之前，commitIndex 无法更新
+```
+
+**如果收到客户端请求（Term 2）**：
+
+```java
+// 收到客户端请求
+log.add(6, new LogEntry(2, "SET x=1")); // Term=2
+
+// 复制到大多数节点
+matchIndex = [6, 6, 6, 6, 6];
+
+// 检查是否可以提交
+for (int i = commitIndex + 1; i <= getLastLogIndex(); i++) {
+    if (log.get(i).term == currentTerm) { // i=6, term=2 == currentTerm=2
+        if (mostServersHaveLog(6)) {
+            commitIndex = 6; // ⭐ 提交 index=6
+        }
+    }
+}
+// commitIndex 更新为 6
+// 由于日志匹配特性，log[5], log[4], log[3], log[2], log[1] 也自动提交
+
+// 应用日志到状态机
+while (commitIndex > lastApplied) {
+    lastApplied++;
+    applyLogToStateMachine(log.get(lastApplied));
+}
+// lastApplied 从 0 增加到 6，重新应用 log[1..6]
+```
+
+**为什么这是合理的？**
+
+1. **commitIndex 是"内存标记"，不是"提交状态"**
+   - commitIndex 用于**控制后续的提交逻辑**
+   - log[1..5] 已经在 Term 1 中提交过，不会因为 commitIndex=0 就"取消提交"
+
+2. **提交规则的严格性**
+   - 必须满足 `log[N].term == currentTerm`，这是为了保证安全性
+   - 如果允许直接更新 commitIndex，可能会导致旧任期日志被错误地标记为提交
+
+3. **状态机的状态可以通过重新应用日志恢复**
+   - lastApplied 是易失性状态，重启后丢失
+   - 当 commitIndex 更新后，会重新应用日志到状态机
+
+**修正后的学生理解**：
+
+1. **正确理解了 commitIndex 的非持久化特性**
+   - "这个值是不会持久化的"
+   - 完全准确 ✓
+
+2. **正确理解了 Leader 重启后收集 matchIndex 的方法**
+   - "刚启动可能 matchIndex 都没有，可以直接设置 nextIndex=log.size+1，然后 preLogIndex=nextIndex-1，向各个结点发送心跳信息就能收集到 matchIndex 信息"
+   - 完全准确 ✓
+
+3. **需要修正的理解**
+   - ❌ "可以通过计 matchIndex 算出来" → **需要满足 `log[N].term == currentTerm` 的条件**
+   - ✅ 正确理解：在没有当前任期新日志之前，commitIndex 无法更新
+   - ✅ 正确理解：旧日志的提交状态不会因为 commitIndex=0 而失效
+
+**关键纠正**：
+- Leader 重启后，**必须等待当前任期有新日志**才能更新 commitIndex
+- 旧任期日志会在提交当前任期日志时"间接提交"（利用日志匹配特性）
+- 这是**合理的**，符合论文的提交规则
+
 #### 学生的关键洞察
 
 1. **准确理解了 commitIndex 的非持久化特性**
-   - "这个值是不会持久化的，如果leader重启，可以通过计matchIndex算出来"
-   - 完全准确 ✓
+    - "这个值是不会持久化的"
+    - 完全准确 ✓
 
-2. **准确理解了 Leader 重启后如何恢复 commitIndex**
-   - "刚启动可能matchIndex都没有，可以直接设置nextIndex=log.size+1，然后preLogIndex=nextIndex-1，向各个结点发送心跳信息就能收集到matchIndex信息"
-   - 非常专业 ✓
+2. **准确理解了 Leader 重启后收集 matchIndex 的方法**
+    - "刚启动可能 matchIndex 都没有，可以直接设置 nextIndex=log.size+1，然后 preLogIndex=nextIndex-1，向各个结点发送心跳信息就能收集到 matchIndex 信息"
+    - 完全准确 ✓
 
 3. **准确理解了提交和应用的独立性**
-   - "提交和应用是两个独立的动作，任何结点都有这两个动作"
-   - "commitIndex >= applyindex"
-   - 完全准确 ✓
+    - "提交和应用是两个独立的动作，任何结点都有这两个动作"
+    - "commitIndex >= applyindex"
+    - 完全准确 ✓
+
+4. **指出了 AI 回答中的矛盾**
+    - "更新了内存不就相当于提交了吗？不然这个内存中的 commitIndex 有啥用"
+    - 这个质疑**非常准确**，帮助纠正了对 commitIndex 作用的误解 ✓
 
 ---
 
