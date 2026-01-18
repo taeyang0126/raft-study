@@ -321,58 +321,6 @@ AGENTS.md                     # 本文件 - AI 助手工作指南
 rm -rf progress/ sessions/
 ```
 
-## 学习领域示例
-
-虽然这是一个通用学习框架，但以下是常见的技术学习领域：
-
-### 后端开发
-- Java/Spring Boot/Spring Cloud
-- Go/Python/Node.js
-- 微服务架构
-- REST API 设计
-- GraphQL
-- 数据库设计和优化（MySQL, PostgreSQL, MongoDB）
-- 分布式事务
-- 消息队列（Kafka, RabbitMQ）
-
-### 前端开发
-- React/Vue/Angular
-- TypeScript
-- CSS/JavaScript（ES6+）
-- 状态管理（Redux, Vuex, MobX, Zustand）
-- Next.js/Nuxt.js
-- 性能优化
-- Webpack/Vite 构建工具
-
-### DevOps/基础设施
-- Docker/Kubernetes
-- CI/CD 流水线（GitHub Actions, GitLab CI, Jenkins）
-- 云平台（AWS/Azure/GCP）
-- 监控和日志（Prometheus, Grafana, ELK）
-- 基础设施即代码（Terraform, Ansible）
-
-### 架构和设计
-- 系统设计模式
-- 领域驱动设计（DDD）
-- 事件驱动架构
-- 分布式系统原理（CAP 定理, 分布式一致性）
-- 设计模式（创建型、结构型、行为型）
-- 软件架构原则
-
-### 工具和实践
-- Git 工作流（Git Flow, GitHub Flow）
-- 代码审查
-- 测试策略（单元测试、集成测试、E2E 测试）
-- 代码质量工具（ESLint, SonarQube, Checkstyle）
-- 重构技巧
-
-### 新兴技术
-- AI/ML 基础
-- Web3/区块链
-- Serverless
-- 边缘计算
-- 云原生
-
 ## 学习进阶建议
 
 ### 从基础到高级
